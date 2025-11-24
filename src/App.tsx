@@ -21,6 +21,15 @@ export default function App() {
     const [position, setPosition] = useLocalState<CanvasPosition>('position', { x: 0, y: 0, zoom: 1 })
     const [history, setHistory] = useLocalState<Action[]>('history', [])
 
+    const activePointersRef = useRef(new Map<number, { clientX: number, clientY: number }>())
+    const isGesturingRef = useRef(false)
+    const startGestureRef = useRef({
+        zoom: 1,
+        distance: 0,
+        center: { clientX: 0, clientY: 0 },
+        pan: { x: 0, y: 0 }
+    })
+
     const size = brush === 'pen' ? penSize : eraserSize
     const setSize = brush === 'pen' ? setPenSize : setEraserSize
     const minSize = 2
@@ -166,7 +175,7 @@ export default function App() {
             activeCanvas.style.width = `${width}px`
             activeCanvas.style.height = `${height}px`
 
-            setResizeTrigger(n => n + 1)
+            setResizeTrigger((n) => n + 1)
         }
         
         updateSize()
@@ -180,18 +189,33 @@ export default function App() {
     // Render static history
     useEffect(() => {
         const canvas = staticCanvasRef.current
-        if (!canvas) return
+        if (!canvas || !containerRef.current) return
         const ctx = canvas.getContext('2d')
         if (!ctx) return
 
-        const dpr = window.devicePixelRatio || 1
+        // Use lower quality during gestures for performance
+        const targetDpr = isGesturingRef.current ? 1 : (window.devicePixelRatio || 1)
+        
+        // Ensure canvas size matches target DPR
+        const width = containerRef.current.clientWidth
+        const height = containerRef.current.clientHeight
+        const sizeChanged = canvas.width !== width * targetDpr || canvas.height !== height * targetDpr
+
+        if (sizeChanged) {
+            canvas.width = width * targetDpr
+            canvas.height = height * targetDpr
+            canvas.style.width = `${width}px`
+            canvas.style.height = `${height}px`
+        }
+
+        const dpr = targetDpr
         
         const isResize = resizeTrigger !== prevResizeTriggerRef.current
         const posChanged = position.x !== prevPositionRef.current.x || 
                            position.y !== prevPositionRef.current.y || 
                            position.zoom !== prevPositionRef.current.zoom
 
-        if (isResize || posChanged) {
+        if (isResize || posChanged || sizeChanged) {
             // Full redraw
             ctx.setTransform(1, 0, 0, 1, 0, 0)
             ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -257,7 +281,7 @@ export default function App() {
 
             <div className='toolbar'>
                 <div className='tools'>
-                    <button onPointerDown={() => alert('hi')} className={brush === 'pen' ? 'active' : ''} onClick={() => setBrush('pen')}>
+                    <button className={brush === 'pen' ? 'active' : ''} onClick={() => setBrush('pen')}>
                         <FaPenFancy />
                     </button>
                     <button className={brush === 'eraser' ? 'active' : ''} onClick={() => setBrush('eraser')}>
@@ -300,10 +324,73 @@ export default function App() {
                 onPointerDown={(event) => {
                     event.preventDefault()
                     containerRef.current?.setPointerCapture(event.pointerId)
-                    inProgressRef.current.set(event.pointerId, [])
-                    renderActiveStrokes()
+
+                    activePointersRef.current.set(event.pointerId, {
+                        clientX: event.clientX,
+                        clientY: event.clientY,
+                    })
+
+                    if (activePointersRef.current.size === 2) {
+                        // Start gesture
+                        isGesturingRef.current = true
+                        inProgressRef.current.clear() // Cancel any drawing
+                        renderActiveStrokes()
+
+                        const pointers = [...activePointersRef.current.values()]
+                        const p1 = pointers[0]!
+                        const p2 = pointers[1]!
+                        const dist = Math.hypot(p2.clientX - p1.clientX, p2.clientY - p1.clientY)
+                        const center = {
+                            clientX: (p1.clientX + p2.clientX) / 2,
+                            clientY: (p1.clientY + p2.clientY) / 2,
+                        }
+
+                        startGestureRef.current = {
+                            zoom: position.zoom,
+                            distance: dist,
+                            center,
+                            pan: { x: position.x, y: position.y },
+                        }
+                    } else if (!isGesturingRef.current) {
+                        inProgressRef.current.set(event.pointerId, [])
+                        renderActiveStrokes()
+                    }
                 }}
                 onPointerMove={(event) => {
+                    activePointersRef.current.set(event.pointerId, {
+                        clientX: event.clientX,
+                        clientY: event.clientY,
+                    })
+
+                    if (isGesturingRef.current && activePointersRef.current.size === 2) {
+                        const pointers = [...activePointersRef.current.values()]
+                        const p1 = pointers[0]!
+                        const p2 = pointers[1]!
+                        const dist = Math.hypot(p2.clientX - p1.clientX, p2.clientY - p1.clientY)
+                        const center = {
+                            clientX: (p1.clientX + p2.clientX) / 2,
+                            clientY: (p1.clientY + p2.clientY) / 2,
+                        }
+
+                        const start = startGestureRef.current
+                        const scale = dist / start.distance
+                        const newZoom = Math.max(Math.min(start.zoom * scale, 15), 0.05)
+
+                        const worldX = (start.center.clientX + start.pan.x) / start.zoom
+                        const worldY = (start.center.clientY + start.pan.y) / start.zoom
+
+                        // New top-left position:
+                        const newX = (worldX * newZoom) - center.clientX
+                        const newY = (worldY * newZoom) - center.clientY
+
+                        setPosition({
+                            zoom: newZoom,
+                            x: newX,
+                            y: newY,
+                        })
+                        return
+                    }
+
                     const line = inProgressRef.current.get(event.pointerId)
                     if (!line) return
 
@@ -317,7 +404,15 @@ export default function App() {
                 }}
                 onPointerUp={(event) => {
                     containerRef.current?.releasePointerCapture(event.pointerId)
+                    activePointersRef.current.delete(event.pointerId)
                     
+                    if (activePointersRef.current.size < 2) {
+                        if (isGesturingRef.current) {
+                            isGesturingRef.current = false
+                            setResizeTrigger((n) => n + 1)
+                        }
+                    }
+
                     if (inProgressRef.current.has(event.pointerId)) {
                         const stroke = pointsToPath(inProgressRef.current.get(event.pointerId)!, size)
 
@@ -336,6 +431,15 @@ export default function App() {
                 }}
                 onPointerCancel={(event) => {
                     containerRef.current?.releasePointerCapture(event.pointerId)
+                    activePointersRef.current.delete(event.pointerId)
+                    
+                    if (activePointersRef.current.size < 2) {
+                        if (isGesturingRef.current) {
+                            isGesturingRef.current = false
+                            setResizeTrigger((n) => n + 1)
+                        }
+                    }
+
                     inProgressRef.current.delete(event.pointerId)
                     renderActiveStrokes()
                 }}

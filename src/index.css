@@ -170,6 +170,8 @@ body {
         display: block;
         touch-action: none;
         pointer-events: none;
+        transform-origin: top left;
+        will-change: transform;
     }
 }
 
