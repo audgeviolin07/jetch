@@ -85,6 +85,7 @@ const server = serve({
         hmr: true,
         console: true,
     },
+    hostname: process.env.NODE_ENV === 'production' ? '0.0.0.0' : 'localhost',
 })
 
 console.log(`🚀 Server running at ${server.url}`)
