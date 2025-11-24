@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type MouseEvent } from 'react'
+import { useId, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import styles from './SharingModal.module.css'
 import { FocusTrap } from 'focus-trap-react'
 import { useBlobjectUrl, useLocalState } from '@/utils'
@@ -29,7 +29,7 @@ export default function SharingModal(props: SharingModalProps) {
     const [c, setC] = useLocalState('c', '')
     const [lexi, setLexi] = useLocalState<boolean>('lexi', false)
 
-    function onContainerMouseDown(event: MouseEvent) {
+    function onContainerPointerDown(event: PointerEvent) {
         // If the event chain doesn't contain the modal, then close the modal.
         if (!modalRef.current?.contains(event.target as Node) && !isLoading) {
             props.onClose()
@@ -38,7 +38,7 @@ export default function SharingModal(props: SharingModalProps) {
 
     if (isSent) {
         return (
-            <div className={styles.container} onMouseDown={onContainerMouseDown}>
+            <div className={styles.container} onPointerDown={onContainerPointerDown}>
                 <FocusTrap>
                     <form ref={modalRef} className={styles.modal} onSubmit={(event) => {
                         event.preventDefault()
@@ -58,8 +58,8 @@ export default function SharingModal(props: SharingModalProps) {
     }
     
     return (
-        <div className={styles.container} onMouseDown={onContainerMouseDown}>
-            <FocusTrap>
+        <div className={styles.container} onPointerDown={onContainerPointerDown}>
+            <FocusTrap focusTrapOptions={{ initialFocus: false }}>
                 <form ref={modalRef} className={styles.modal} spellCheck={false} noValidate onSubmit={async (event) => {
                     event.preventDefault()
                     setIsLoading(true)

@@ -42,6 +42,7 @@ body {
         margin: 4px;
         transition: transform 200ms;
         user-select: none;
+        touch-action: none;
     }
 
     .tools {
@@ -89,6 +90,7 @@ body {
                 margin: 0 15px;
                 align-self: center;
                 cursor: pointer;
+                touch-action: none;
 
                 &::-webkit-slider-thumb {
                     -webkit-appearance: none;
@@ -160,6 +162,15 @@ body {
     height: 100%;
     touch-action: none;
     overflow: hidden;
+
+    canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        display: block;
+        touch-action: none;
+        pointer-events: none;
+    }
 }
 
 svg {
@@ -173,7 +184,7 @@ svg {
     left: var(--photograph-gutter);
     top: var(--photograph-gutter);
     bottom: var(--photograph-gutter);
-    width: 150px;
+    width: 200px;
     z-index: 999;
 }
 
@@ -182,7 +193,7 @@ svg {
     right: var(--photograph-gutter);
     top: var(--photograph-gutter);
     bottom: var(--photograph-gutter);
-    width: 150px;
+    width: 200px;
     z-index: 999;
 }
 

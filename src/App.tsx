@@ -1,16 +1,17 @@
-import { useEffect, useId, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './index.css'
 import { produce } from 'immer'
 import { nanoid } from 'nanoid'
 import Photograph from './photograph/Photograph'
 import { FaEraser, FaPenFancy } from 'react-icons/fa6'
 import SharingModal from './sharing/SharingModal'
-import { processHistory, pointsToPath, pathToSvgD, type Point, type Action, useLocalState, type Brush, type CanvasPosition, exportAsPng } from './utils'
+import { pointsToPath, type Point, type Action, useLocalState, type Brush, type CanvasPosition, exportAsPng, drawPath, renderPaths } from './utils'
 
 export default function App() {
     const containerRef = useRef<HTMLDivElement>(null)
-    const svgRef = useRef<SVGSVGElement>(null)
-    const [inProgress, setInProgress] = useState(new Map<number, Point[]>())
+    const staticCanvasRef = useRef<HTMLCanvasElement>(null)
+    const activeCanvasRef = useRef<HTMLCanvasElement>(null)
+    const inProgressRef = useRef(new Map<number, Point[]>())
     const redo = useRef<Action[]>([])
     const [sharingBlob, setSharingBlob] = useState<Blob | null>(null)
     
@@ -23,7 +24,7 @@ export default function App() {
     const size = brush === 'pen' ? penSize : eraserSize
     const setSize = brush === 'pen' ? setPenSize : setEraserSize
     const minSize = 2
-    const maxSize = brush === 'pen' ? 30 : 50
+    const maxSize = brush === 'pen' ? 30 : 80
 
     const cursor = useMemo(() => {
         const actualSize = size * position.zoom
@@ -46,6 +47,42 @@ export default function App() {
         const encoded = encodeURIComponent(svg.replace(/[\r\n]+/g, '').trim())
         return `url("data:image/svg+xml;utf8,${encoded}") ${c} ${c}, auto`
     }, [size, position.zoom, brush])
+
+    function renderActiveStrokes() {
+        const canvas = activeCanvasRef.current
+        if (!canvas) return
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+
+        const dpr = window.devicePixelRatio || 1
+        
+        // Reset transform and clear
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        
+        // Apply transforms
+        ctx.scale(dpr, dpr)
+        ctx.translate(-position.x, -position.y)
+        ctx.scale(position.zoom, position.zoom)
+
+        // Draw in-progress
+        if (inProgressRef.current.size > 0) {
+            const inProgressPaths = [...inProgressRef.current.values()].map(points => pointsToPath(points, size))
+            
+            if (brush === 'eraser') {
+                // For erasing, we draw white on the active layer to simulate looking through to background
+                ctx.fillStyle = 'white'
+                ctx.globalCompositeOperation = 'source-over'
+            } else {
+                ctx.fillStyle = 'black'
+                ctx.globalCompositeOperation = 'source-over'
+            }
+            
+            for (const path of inProgressPaths) {
+                drawPath(ctx, path)
+            }
+        }
+    }
 
     useEffect(() => {
         function onWheel(event: WheelEvent) {
@@ -102,77 +139,116 @@ export default function App() {
         }
     }, [])
 
-    const { eraserPaths, generationMasks, generationGroups, globalBounds } = useMemo(() => {
-        const boundsPadding = 100
-        const { groups, eraserActions, bounds } = processHistory(history)
-        
-        // Convert each eraser action to an SVG path, to be used in masks later.
-        const paths = eraserActions.map((eraser) => (
-            <path 
-                key={eraser.id} 
-                id={`eraser-${eraser.id}`} 
-                d={pathToSvgD(eraser.path)} 
-            />
-        ))
+    const [resizeTrigger, setResizeTrigger] = useState(0)
 
-        const masks: ReactNode[] = []
-        const renderedGroups: ReactNode[] = []
+    const prevHistoryRef = useRef<Action[]>([])
+    const prevPositionRef = useRef<CanvasPosition>(position)
+    const prevResizeTriggerRef = useRef<number>(0)
 
-        for (let i = 0; i < groups.length; i++) {
-            const group = groups[i]!
+    useEffect(() => {
+        const staticCanvas = staticCanvasRef.current
+        const activeCanvas = activeCanvasRef.current
+        const container = containerRef.current
+        if (!staticCanvas || !activeCanvas || !container) return
+
+        const updateSize = () => {
+            const dpr = window.devicePixelRatio || 1
+            const width = container.clientWidth
+            const height = container.clientHeight
             
-            if (group.relevantErasers.length === 0) {
-                renderedGroups.push(
-                    <g key={`gen-${i}`}>
-                        {group.strokes.map(s => (
-                            <path key={s.id} d={pathToSvgD(s.path)} fill='currentColor' />
-                        ))}
-                    </g>
-                )
+            staticCanvas.width = width * dpr
+            staticCanvas.height = height * dpr
+            staticCanvas.style.width = `${width}px`
+            staticCanvas.style.height = `${height}px`
+            
+            activeCanvas.width = width * dpr
+            activeCanvas.height = height * dpr
+            activeCanvas.style.width = `${width}px`
+            activeCanvas.style.height = `${height}px`
+
+            setResizeTrigger(n => n + 1)
+        }
+        
+        updateSize()
+
+        const observer = new ResizeObserver(updateSize)
+        observer.observe(container)
+        
+        return () => observer.disconnect()
+    }, [])
+
+    // Render static history
+    useEffect(() => {
+        const canvas = staticCanvasRef.current
+        if (!canvas) return
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+
+        const dpr = window.devicePixelRatio || 1
+        
+        const isResize = resizeTrigger !== prevResizeTriggerRef.current
+        const posChanged = position.x !== prevPositionRef.current.x || 
+                           position.y !== prevPositionRef.current.y || 
+                           position.zoom !== prevPositionRef.current.zoom
+
+        if (isResize || posChanged) {
+            // Full redraw
+            ctx.setTransform(1, 0, 0, 1, 0, 0)
+            ctx.clearRect(0, 0, canvas.width, canvas.height)
+            ctx.scale(dpr, dpr)
+            ctx.translate(-position.x, -position.y)
+            ctx.scale(position.zoom, position.zoom)
+            renderPaths(ctx, history)
+        } else {
+            // Check for incremental update
+            const prev = prevHistoryRef.current
+            const curr = history
+            let match = true
+            let i = 0
+            
+            // Find the first point of divergence
+            for (; i < prev.length; i++) {
+                if (i >= curr.length || prev[i] !== curr[i]) {
+                    match = false
+                    break
+                }
+            }
+
+            if (match) {
+                // We just added items (or nothing changed)
+                // Ensure transform is set
+                ctx.setTransform(1, 0, 0, 1, 0, 0)
+                ctx.scale(dpr, dpr)
+                ctx.translate(-position.x, -position.y)
+                ctx.scale(position.zoom, position.zoom)
+
+                // Draw new items only
+                for (let j = i; j < curr.length; j++) {
+                    const action = curr[j]!
+                    ctx.globalCompositeOperation = action.kind === 'eraser' ? 'destination-out' : 'source-over'
+                    drawPath(ctx, action.path)
+                }
             } else {
-                // Draw the masks!
-                const maskId = `mask-gen-${i}`
-                masks.push(
-                    <mask id={maskId} key={maskId}>
-                        <rect 
-                            x={group.bounds.minX - boundsPadding} 
-                            y={group.bounds.minY - boundsPadding} 
-                            width={group.bounds.maxX - group.bounds.minX + boundsPadding * 2} 
-                            height={group.bounds.maxY - group.bounds.minY + boundsPadding * 2} 
-                            fill='white' 
-                        />
-                        {group.relevantErasers.map(e => (
-                            <use key={e.id} href={`#eraser-${e.id}`} fill='black' />
-                        ))}
-                    </mask>
-                )
-                renderedGroups.push(
-                    <g key={`gen-${i}`} mask={`url(#${maskId})`}>
-                        {group.strokes.map(s => (
-                            <path key={s.id} d={pathToSvgD(s.path)} fill='currentColor' />
-                        ))}
-                    </g>
-                )
+                // History diverged (undo, or replacement), full redraw
+                ctx.setTransform(1, 0, 0, 1, 0, 0)
+                ctx.clearRect(0, 0, canvas.width, canvas.height)
+                ctx.scale(dpr, dpr)
+                ctx.translate(-position.x, -position.y)
+                ctx.scale(position.zoom, position.zoom)
+                renderPaths(ctx, history)
             }
         }
 
-        return { 
-            eraserPaths: paths, 
-            generationMasks: masks, 
-            generationGroups: renderedGroups,
-            globalBounds: {
-                x: bounds.minX - boundsPadding,
-                y: bounds.minY - boundsPadding,
-                width: bounds.width + boundsPadding * 2,
-                height: bounds.height + boundsPadding * 2,
-            }
-        }
-    }, [history])
+        prevHistoryRef.current = history
+        prevPositionRef.current = position
+        prevResizeTriggerRef.current = resizeTrigger
+        
+    }, [history, position, resizeTrigger])
 
-
-    const inProgressPaths = [...inProgress.values()].map(points => pointsToPath(points, size))
-    const inProgressEraserId = useId()
-    const isErasing = brush === 'eraser' && inProgressPaths.length > 0
+    // Re-render active strokes when view changes
+    useEffect(() => {
+        renderActiveStrokes()
+    }, [position, size, brush, resizeTrigger])
 
     return (
         <div>
@@ -181,7 +257,7 @@ export default function App() {
 
             <div className='toolbar'>
                 <div className='tools'>
-                    <button className={brush === 'pen' ? 'active' : ''} onClick={() => setBrush('pen')}>
+                    <button onPointerDown={() => alert('hi')} className={brush === 'pen' ? 'active' : ''} onClick={() => setBrush('pen')}>
                         <FaPenFancy />
                     </button>
                     <button className={brush === 'eraser' ? 'active' : ''} onClick={() => setBrush('eraser')}>
@@ -222,25 +298,28 @@ export default function App() {
             <div
                 ref={containerRef}
                 onPointerDown={(event) => {
+                    event.preventDefault()
                     containerRef.current?.setPointerCapture(event.pointerId)
-                    setInProgress(produce((draft) => {
-                        draft.set(event.pointerId, [])
-                    }))
+                    inProgressRef.current.set(event.pointerId, [])
+                    renderActiveStrokes()
                 }}
                 onPointerMove={(event) => {
-                    setInProgress(produce((draft) => {
-                        const line = draft.get(event.pointerId)
-                        if (!line) return
-                        line.push({
-                            x: (event.clientX + position.x) / position.zoom,
-                            y: (event.clientY + position.y) / position.zoom,
-                            pressure: event.pressure,
-                        })
-                    }))
+                    const line = inProgressRef.current.get(event.pointerId)
+                    if (!line) return
+
+                    line.push({
+                        x: (event.clientX + position.x) / position.zoom,
+                        y: (event.clientY + position.y) / position.zoom,
+                        pressure: event.pressure,
+                    })
+                    
+                    renderActiveStrokes()
                 }}
                 onPointerUp={(event) => {
-                    if (inProgress.has(event.pointerId)) {
-                        const stroke = pointsToPath(inProgress.get(event.pointerId)!, size)
+                    containerRef.current?.releasePointerCapture(event.pointerId)
+                    
+                    if (inProgressRef.current.has(event.pointerId)) {
+                        const stroke = pointsToPath(inProgressRef.current.get(event.pointerId)!, size)
 
                         redo.current = []
                         setHistory(produce((draft) => {
@@ -251,51 +330,20 @@ export default function App() {
                             })
                         }))
 
-                        setInProgress(produce((draft) => {
-                            draft.delete(event.pointerId)
-                        }))
+                        inProgressRef.current.delete(event.pointerId)
+                        renderActiveStrokes()
                     }
+                }}
+                onPointerCancel={(event) => {
+                    containerRef.current?.releasePointerCapture(event.pointerId)
+                    inProgressRef.current.delete(event.pointerId)
+                    renderActiveStrokes()
                 }}
                 className='container'
                 style={{ cursor }}
             >
-                <svg
-                    ref={svgRef}
-                    style={{
-                        transformOrigin: 'top left', 
-                        transform: `
-                            translate(${-position.x}px, ${-position.y}px)
-                            scale(${position.zoom})
-                        `,
-                    }}
-                >
-                    <defs>
-                        {eraserPaths}
-                        {generationMasks}
-                        {isErasing && (
-                            <mask id={inProgressEraserId}>
-                                <rect 
-                                    x={globalBounds.x} 
-                                    y={globalBounds.y} 
-                                    width={globalBounds.width} 
-                                    height={globalBounds.height} 
-                                    fill='white' 
-                                />
-                                {inProgressPaths.map((p, i) => (
-                                    <path key={i} d={pathToSvgD(p)} fill='black' />
-                                ))}
-                            </mask>
-                        )}
-                    </defs>
-                    
-                    <g mask={isErasing ? `url(#${inProgressEraserId})` : undefined}>
-                        {generationGroups}
-                    </g>
-                    
-                    {brush === 'pen' && inProgressPaths.map((p, i) => (
-                        <path key={i} d={pathToSvgD(p)} fill='currentColor' />
-                    ))}
-                </svg>
+                <canvas ref={staticCanvasRef} />
+                <canvas ref={activeCanvasRef} />
             </div>
 
             {sharingBlob && <SharingModal pngBlob={sharingBlob} onClose={() => setSharingBlob(null)} />}

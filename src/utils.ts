@@ -22,6 +22,34 @@ export function pointsToPath(points: Point[], size: number): [number, number][] 
     }) satisfies number[][] as [number, number][]
 }
 
+export function drawPath(ctx: CanvasRenderingContext2D, points: [number, number][]) {
+    if (points.length < 2) return
+
+    ctx.beginPath()
+    const p0 = points[0]!
+    ctx.moveTo(p0[0], p0[1])
+    
+    for (let i = 0; i < points.length - 1; i++) {
+        const [x0, y0] = points[i]!
+        const [x1, y1] = points[i+1]!
+        const midX = (x0 + x1) / 2
+        const midY = (y0 + y1) / 2
+        ctx.quadraticCurveTo(x0, y0, midX, midY)
+    }
+    
+    ctx.closePath()
+    ctx.fill()
+}
+
+export function renderPaths(ctx: CanvasRenderingContext2D, history: Action[], color: string = 'black') {
+    ctx.fillStyle = color
+    
+    for (const action of history) {
+        ctx.globalCompositeOperation = action.kind === 'eraser' ? 'destination-out' : 'source-over'
+        drawPath(ctx, action.path)
+    }
+}
+
 export function pathToSvgD(points: [number, number][]): string {
     if (points.length === 0) return ''
 
@@ -38,7 +66,7 @@ export function pathToSvgD(points: [number, number][]): string {
         .join('')
 }
 
-function getBounds(points: [number, number][]) {
+export function getBounds(points: [number, number][]) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     for (const [x, y] of points) {
         if (x < minX) minX = x
@@ -49,147 +77,65 @@ function getBounds(points: [number, number][]) {
     return { minX, minY, maxX, maxY }
 }
 
-export function processHistory(history: Action[]) {
-    const eraserActions = history.filter((action) => action.kind === 'eraser')
-    
-    const groups: { 
-        strokes: Action[], 
-        relevantErasers: Action[],
-        bounds: { minX: number, minY: number, maxX: number, maxY: number } 
-    }[] = []
-    
-    let currentStrokes: Action[] = []
-    let eraserIdx = 0
-
-    const flushGroup = () => {
-        if (currentStrokes.length > 0) {
-            let gMinX = Infinity, gMinY = Infinity, gMaxX = -Infinity, gMaxY = -Infinity
-            for (const s of currentStrokes) {
-                const b = getBounds(s.path)
-                if (b.minX < gMinX) gMinX = b.minX
-                if (b.minY < gMinY) gMinY = b.minY
-                if (b.maxX > gMaxX) gMaxX = b.maxX
-                if (b.maxY > gMaxY) gMaxY = b.maxY
-            }
-            
-            groups.push({
-                strokes: currentStrokes,
-                relevantErasers: eraserActions.slice(eraserIdx),
-                bounds: { minX: gMinX, minY: gMinY, maxX: gMaxX, maxY: gMaxY }
-            })
-            currentStrokes = []
-        }
-    }
-
-    for (const action of history) {
-        if (action.kind === 'eraser') {
-            flushGroup()
-            eraserIdx++
-        } else {
-            currentStrokes.push(action)
-        }
-    }
-    flushGroup()
-    
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-    for (const g of groups) {
-        if (g.bounds.minX < minX) minX = g.bounds.minX
-        if (g.bounds.minY < minY) minY = g.bounds.minY
-        if (g.bounds.maxX > maxX) maxX = g.bounds.maxX
-        if (g.bounds.maxY > maxY) maxY = g.bounds.maxY
-    }
-    
-    if (minX === Infinity) {
-        minX = 0; minY = 0; maxX = 0; maxY = 0;
-    }
-
-    return {
-        groups,
-        eraserActions,
-        bounds: { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY }
-    }
-}
-
 export async function exportAsPng(history: Action[]): Promise<Blob> {
-    const { groups, eraserActions, bounds } = processHistory(history)
-    const padding = 20
-    const maskPadding = 100
+    // Calculate global bounds
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    let hasContent = false
     
-    const width = Math.ceil(bounds.width + padding * 2)
-    const height = Math.ceil(bounds.height + padding * 2)
-    const x = bounds.minX - padding
-    const y = bounds.minY - padding
-
-    let defs = ''
-    eraserActions.forEach(e => {
-        defs += `<path id='eraser-${e.id}' d='${pathToSvgD(e.path)}' />`
-    })
-
-    let content = ''
-    
-    groups.forEach((g, i) => {
-        const groupContent = g.strokes.map(s => `<path d='${pathToSvgD(s.path)}' fill='black' />`).join('')
-        
-        if (g.relevantErasers.length > 0) {
-            const maskId = `mask-gen-${i}`
-            const maskRect = `<rect x='${g.bounds.minX - maskPadding}' y='${g.bounds.minY - maskPadding}' width='${g.bounds.maxX - g.bounds.minX + maskPadding * 2}' height='${g.bounds.maxY - g.bounds.minY + maskPadding * 2}' fill='white' />`
-            const maskErasers = g.relevantErasers.map(e => `<use href='#eraser-${e.id}' fill='black' />`).join('')
-            
-            defs += `<mask id='${maskId}'>${maskRect}${maskErasers}</mask>`
-            content += `<g mask='url(#${maskId})'>${groupContent}</g>`
-        } else {
-            content += `<g>${groupContent}</g>`
+    for (const action of history) {
+        if (action.kind === 'pen') {
+            const b = getBounds(action.path)
+            if (b.minX < minX) minX = b.minX
+            if (b.minY < minY) minY = b.minY
+            if (b.maxX > maxX) maxX = b.maxX
+            if (b.maxY > maxY) maxY = b.maxY
+            hasContent = true
         }
-    })
+    }
+
+    if (!hasContent) {
+         minX = 0; minY = 0; maxX = 0; maxY = 0;
+    }
     
-    const svgString = `
-        <svg xmlns='http://www.w3.org/2000/svg' width='${width}' height='${height}' viewBox='${x} ${y} ${width} ${height}'>
-            <defs>${defs}</defs>
-            ${content}
-        </svg>
-    `
-    
-    const svgBlob = new Blob([svgString], { type: 'image/svg+xml' })
-    const url = URL.createObjectURL(svgBlob)
-    
-    const img = new Image()
-    img.src = url
-    
-    await new Promise((resolve, reject) => {
-        img.onload = resolve
-        img.onerror = reject
-    })
+    const padding = 20
+    const width = Math.ceil(maxX - minX + padding * 2)
+    const height = Math.ceil(maxY - minY + padding * 2)
     
     const canvas = document.createElement('canvas')
     canvas.width = width
     canvas.height = height
     const ctx = canvas.getContext('2d')!
-    ctx.drawImage(img, 0, 0)
+    
+    // Translate to center the content with padding
+    ctx.translate(-minX + padding, -minY + padding)
+    
+    renderPaths(ctx, history)
     
     const imageData = ctx.getImageData(0, 0, width, height)
     const data = imageData.data
     
-    let minX = width
-    let minY = height
-    let maxX = 0
-    let maxY = 0
+    // Crop transparent pixels
+    let cMinX = width
+    let cMinY = height
+    let cMaxX = 0
+    let cMaxY = 0
     let found = false
 
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             const alpha = data[(y * width + x) * 4 + 3]!
             if (alpha > 0) {
-                if (x < minX) minX = x
-                if (x > maxX) maxX = x
-                if (y < minY) minY = y
-                if (y > maxY) maxY = y
+                if (x < cMinX) cMinX = x
+                if (x > cMaxX) cMaxX = x
+                if (y < cMinY) cMinY = y
+                if (y > cMaxY) cMaxY = y
                 found = true
             }
         }
     }
 
-    const cropWidth = found ? maxX - minX + 1 : 0
-    const cropHeight = found ? maxY - minY + 1 : 0
+    const cropWidth = found ? cMaxX - cMinX + 1 : 0
+    const cropHeight = found ? cMaxY - cMinY + 1 : 0
 
     const outputCanvas = document.createElement('canvas')
     outputCanvas.width = cropWidth + padding * 2
@@ -202,7 +148,7 @@ export async function exportAsPng(history: Action[]): Promise<Blob> {
     if (found) {
         outCtx.drawImage(
             canvas,
-            minX, minY, cropWidth, cropHeight,
+            cMinX, cMinY, cropWidth, cropHeight,
             padding, padding, cropWidth, cropHeight
         )
     }

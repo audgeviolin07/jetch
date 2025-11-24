@@ -19,7 +19,7 @@
         border-radius: 10px;
         width: 100%;
         max-width: 550px;
-        padding: 30px;
+        padding: 20px 30px;
         font-size: 1.2rem;
 
         label {
@@ -63,6 +63,7 @@
             input {
                 display: block;
                 flex: 1;
+                min-width: 0;
                 font-size: inherit;
                 font-family: inherit;
                 border: none;
@@ -86,8 +87,8 @@
                 appearance: none;
                 -webkit-appearance: none;
                 cursor: pointer;
-                width: 30px;
-                height: 30px;
+                min-width: 30px;
+                min-height: 30px;
                 background-color: #f0f1f3;
                 border-radius: 8px;
                 display: flex;
@@ -187,5 +188,20 @@
     }
     100% {
         opacity: 1;
+    }
+}
+
+@media (max-width: 500px) {
+    .container {
+        padding: 0;
+        align-items: flex-end;
+
+        .modal {
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+            font-size: 1.1rem;
+            padding: 10px 15px;
+            padding-top: 20px;
+        }
     }
 }
