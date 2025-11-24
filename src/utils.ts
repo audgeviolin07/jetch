@@ -232,12 +232,11 @@ export function useLocalState<Type>(
 ): [Type, Dispatch<SetStateAction<Type>>] {
     const [state, setState] = useState<Type>(() => {
         const stored = localStorage.getItem(key)
-        if (stored) return JSON.parse(stored)
+        if (stored !== null) return JSON.parse(stored)
         return defaultValue
     })
 
     useEffect(() => {
-        if (!state) return
         localStorage.setItem(key, JSON.stringify(state))
     }, [state])
 

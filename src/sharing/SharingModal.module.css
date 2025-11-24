@@ -173,6 +173,11 @@
                 }
             }
         }
+
+        .error {
+            margin-top: 10px;
+            color: #f03e3e;
+        }
     }
 }
 
