@@ -1,86 +1,51 @@
 import { useEffect, useId, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import './index.css'
-import getStroke from 'perfect-freehand'
 import { produce } from 'immer'
 import { nanoid } from 'nanoid'
 import Photograph from './photograph/Photograph'
 import { FaEraser, FaPenFancy } from 'react-icons/fa6'
-
-interface Point {
-    x: number
-    y: number
-    pressure?: number
-}
-
-interface Action {
-    id: string
-    kind: 'pen' | 'eraser'
-    path: [number, number][]
-}
-
-interface CanvasPosition {
-    zoom: number
-    x: number
-    y: number
-}
-
-type Brush = 'pen' | 'eraser'
-
-function pointsToPath(points: Point[], size: number): [number, number][] {
-    return getStroke(points, {
-        size,
-        thinning: 0.25,
-        streamline: 0.5,
-        smoothing: 0.5,
-    }) satisfies number[][] as [number, number][]
-}
-
-function pathToSvgD(points: [number, number][]): string {
-    if (points.length === 0) return ''
-
-    return points
-        .reduce(
-            (acc, [x0, y0], i, arr) => {
-                if (i === arr.length - 1) return acc
-                const [x1, y1] = arr[i + 1]!
-                return acc.concat(` ${x0},${y0} ${(x0 + x1) / 2},${(y0 + y1) / 2}`)
-            },
-            ['M ', `${points[0]![0]},${points[0]![1]}`, ' Q']
-        )
-        .concat('Z')
-        .join('')
-}
-
-export function useLocalState<Type>(
-    key: string,
-    defaultValue: Type
-): [Type, Dispatch<SetStateAction<Type>>] {
-    const [ state, setState ] = useState<Type>(() => {
-        const stored = localStorage.getItem(key)
-        if (stored) return JSON.parse(stored)
-        return defaultValue
-    })
-
-    useEffect(() => {
-        if (!state) return
-        localStorage.setItem(key, JSON.stringify(state))
-    }, [ state ])
-
-
-    return [ state, setState ]
-}
+import SharingModal from './sharing/SharingModal'
+import { processHistory, pointsToPath, pathToSvgD, type Point, type Action, useLocalState, type Brush, type CanvasPosition, exportAsPng } from './utils'
 
 export default function App() {
     const containerRef = useRef<HTMLDivElement>(null)
     const svgRef = useRef<SVGSVGElement>(null)
     const [inProgress, setInProgress] = useState(new Map<number, Point[]>())
     const redo = useRef<Action[]>([])
+    const [sharingBlob, setSharingBlob] = useState<Blob | null>(null)
     
     const [brush, setBrush] = useLocalState<Brush>('brush', 'pen')
+    const [penSize, setPenSize] = useLocalState<number>('pen-size', 5)
+    const [eraserSize, setEraserSize] = useLocalState<number>('eraser-size', 8)
     const [position, setPosition] = useLocalState<CanvasPosition>('position', { x: 0, y: 0, zoom: 1 })
     const [history, setHistory] = useLocalState<Action[]>('history', [])
 
-    const size = brush === 'pen' ? 5 : 10
+    const size = brush === 'pen' ? penSize : eraserSize
+    const setSize = brush === 'pen' ? setPenSize : setEraserSize
+    const minSize = 2
+    const maxSize = brush === 'pen' ? 30 : 50
+
+    const cursor = useMemo(() => {
+        const actualSize = size * position.zoom
+        const svgSize = Math.ceil(actualSize + 4)
+        const r = actualSize / 2
+        const c = svgSize / 2
+
+        const svg = `
+            <svg width='${svgSize}' height='${svgSize}' xmlns='http://www.w3.org/2000/svg'>
+                <circle
+                    cx='${c}'
+                    cy='${c}'
+                    r='${r}'
+                    stroke='black'
+                    stroke-width='1.5'
+                    fill='${brush === 'pen' ? 'blank' : 'white'}'
+                />
+            </svg>
+        `
+        const encoded = encodeURIComponent(svg.replace(/[\r\n]+/g, '').trim())
+        return `url("data:image/svg+xml;utf8,${encoded}") ${c} ${c}, auto`
+    }, [size, position.zoom, brush])
 
     useEffect(() => {
         function onWheel(event: WheelEvent) {
@@ -139,7 +104,7 @@ export default function App() {
 
     const { eraserPaths, generationMasks, generationGroups, globalBounds } = useMemo(() => {
         const boundsPadding = 100
-        const eraserActions = history.filter((action) => action.kind === 'eraser')
+        const { groups, eraserActions, bounds } = processHistory(history)
         
         // Convert each eraser action to an SVG path, to be used in masks later.
         const paths = eraserActions.map((eraser) => (
@@ -150,61 +115,13 @@ export default function App() {
             />
         ))
 
-        // Bundle strokes into a group until we find an eraser action.
-        const groups: { startEraserIndex: number, strokes: Action[] }[] = []
-        let currentStrokes: Action[] = []
-        let eraserIdx = 0
-
-        for (const action of history) {
-            if (action.kind === 'eraser') {
-                if (currentStrokes.length > 0) {
-                    groups.push({ startEraserIndex: eraserIdx, strokes: currentStrokes })
-                    currentStrokes = []
-                }
-                eraserIdx++
-            } else {
-                currentStrokes.push(action)
-            }
-        }
-        if (currentStrokes.length > 0) {
-            groups.push({ startEraserIndex: eraserIdx, strokes: currentStrokes })
-        }
-
         const masks: ReactNode[] = []
         const renderedGroups: ReactNode[] = []
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
 
         for (let i = 0; i < groups.length; i++) {
             const group = groups[i]!
-
-            // Calculate group bounds
-            let gMinX = Infinity, gMinY = Infinity, gMaxX = -Infinity, gMaxY = -Infinity
-            for (const s of group.strokes) {
-                for (const [x, y] of s.path) {
-                    if (x < gMinX) gMinX = x
-                    if (y < gMinY) gMinY = y
-                    if (x > gMaxX) gMaxX = x
-                    if (y > gMaxY) gMaxY = y
-                }
-            }
-
-            // Update global bounds
-            if (gMinX < minX) minX = gMinX
-            if (gMinY < minY) minY = gMinY
-            if (gMaxX > maxX) maxX = gMaxX
-            if (gMaxY > maxY) maxY = gMaxY
-
-            if (gMinX === Infinity) {
-                gMinX = 0
-                gMinY = 0
-                gMaxX = 0
-                gMaxY = 0
-            }
-
-            // Get all of the eraser actions that occured after this group of strokes.
-            const relevantErasers = eraserActions.slice(group.startEraserIndex)
             
-            if (relevantErasers.length === 0) {
+            if (group.relevantErasers.length === 0) {
                 renderedGroups.push(
                     <g key={`gen-${i}`}>
                         {group.strokes.map(s => (
@@ -218,13 +135,13 @@ export default function App() {
                 masks.push(
                     <mask id={maskId} key={maskId}>
                         <rect 
-                            x={gMinX - boundsPadding} 
-                            y={gMinY - boundsPadding} 
-                            width={gMaxX - gMinX + boundsPadding * 2} 
-                            height={gMaxY - gMinY + boundsPadding * 2} 
+                            x={group.bounds.minX - boundsPadding} 
+                            y={group.bounds.minY - boundsPadding} 
+                            width={group.bounds.maxX - group.bounds.minX + boundsPadding * 2} 
+                            height={group.bounds.maxY - group.bounds.minY + boundsPadding * 2} 
                             fill='white' 
                         />
-                        {relevantErasers.map(e => (
+                        {group.relevantErasers.map(e => (
                             <use key={e.id} href={`#eraser-${e.id}`} fill='black' />
                         ))}
                     </mask>
@@ -239,22 +156,15 @@ export default function App() {
             }
         }
 
-        if (minX === Infinity) {
-            minX = 0
-            minY = 0
-            maxX = 0
-            maxY = 0
-        }
-
         return { 
             eraserPaths: paths, 
             generationMasks: masks, 
             generationGroups: renderedGroups,
             globalBounds: {
-                x: minX - boundsPadding,
-                y: minY - boundsPadding,
-                width: maxX - minX + boundsPadding * 2,
-                height: maxY - minY + boundsPadding * 2,
+                x: bounds.minX - boundsPadding,
+                y: bounds.minY - boundsPadding,
+                width: bounds.width + boundsPadding * 2,
+                height: bounds.height + boundsPadding * 2,
             }
         }
     }, [history])
@@ -277,8 +187,34 @@ export default function App() {
                     <button className={brush === 'eraser' ? 'active' : ''} onClick={() => setBrush('eraser')}>
                         <FaEraser />
                     </button>
+
+                    <div className='divider' />
+
+                    <div className='size-container'>
+                        <input
+                            type='range'
+                            min={minSize * 1000}
+                            max={maxSize * 1000}
+                            value={size * 1000}
+                            onChange={(event) => setSize(parseInt(event.target.value, 10) / 1000)}
+                        />
+
+                        <div className='preview-container' style={{
+                            width: `${maxSize * position.zoom}px`,
+                            height: `${maxSize * position.zoom}px`,
+                            bottom: `-${maxSize * position.zoom + 35}px`,
+                        }}>
+                            <div className={`preview ${brush}`} style={{
+                                width: `${size * position.zoom}px`,
+                                height: `${size * position.zoom}px`,
+                            }} />
+                        </div>
+                    </div>
                 </div>
-                <button>
+                <button onClick={async () => {
+                    const blob = await exportAsPng(history)
+                    setSharingBlob(blob)
+                }}>
                     SHARE WITH PEOPLE
                 </button>
             </div>
@@ -321,6 +257,7 @@ export default function App() {
                     }
                 }}
                 className='container'
+                style={{ cursor }}
             >
                 <svg
                     ref={svgRef}
@@ -360,6 +297,8 @@ export default function App() {
                     ))}
                 </svg>
             </div>
+
+            {sharingBlob && <SharingModal pngBlob={sharingBlob} onClose={() => setSharingBlob(null)} />}
         </div>
     )
 }
