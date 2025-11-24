@@ -1,0 +1,2 @@
+[serve.static]
+plugins = ["./make-css-work.ts"]

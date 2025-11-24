@@ -1,0 +1,139 @@
+.container {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    position: relative;
+    font-family: 'Arial', sans-serif;
+    background: #fafafa;
+
+    img {
+        width: 100%;
+        height: 100%;
+    }
+
+    .adchoices {
+        position: absolute;
+        display: flex;
+        flex-direction: row;
+        top: 0;
+        right: 0;
+        padding-top: 1px;
+        padding-right: 1px;
+        padding-bottom: 8px;
+        padding-left: 8px;
+
+        .label {
+            display: none;
+            flex-direction: row;
+            align-items: center;
+            font-size: 10px;
+            background: #d3d3d3;
+            height: 15px;
+            padding: 0 5px;
+            border-bottom-left-radius: 5px;
+            cursor: default;
+            user-select: none;
+        }
+
+        .iconButtons {
+            display: flex;
+            flex-direction: row;
+            gap: 1px;
+
+            .iconButton {
+                width: 15px;
+                height: 15px;
+                cursor: pointer;
+                fill: #00aecd;
+                background: #ffffff;
+
+                svg {
+                    display: block;
+                }
+            }
+        }
+
+        &:hover {
+            padding-left: 0;
+
+            .label {
+                display: flex;
+            }
+        }
+    }
+
+    .dismiss {
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        cursor: pointer;
+        width: 15px;
+        height: 15px;
+        opacity: 0.5;
+    }
+
+    .buttons {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+
+        button {
+            border: none;
+            outline: none;
+            font-family: inherit;
+            display: block;
+            border-radius: 2px;
+            box-shadow: 0px 0px 2px rgba(0, 0, 0, .12), 0px 1px 3px rgba(0, 0, 0, .26);
+            cursor: pointer;
+            font-size: 14px;
+            padding: 6px;
+            margin: 0 1px 6.5px 1px;
+            width: 90%;
+            max-width: 240px;
+            background-color: #ffffff;
+            color: #9e9ea6;
+
+            .icon {
+                display: inline-block;
+                vertical-align: bottom;
+                fill: currentColor;
+                width: 1lh;
+                height: 1lh;
+            }
+
+            &:hover {
+                background-color: #f5f5f5;
+            }
+
+            &.primary {
+                background-color: #4285f5;
+                color: #ffffff;
+
+                &:hover {
+                    background-color: #3275e5;
+                }
+            }
+        }
+    }
+
+    .adsBy, .adsClosed {
+        color: rgba(0,0,0,.4);
+        font-size: 20px;
+        padding: .3em;
+        padding-top: .6em;
+        line-height: 1.28em;
+        text-align: center;
+
+        .logo {
+            display: inline-block;
+            height: 1lh;
+            vertical-align: bottom;
+            margin-left: 2px;
+        }
+    }
+
+    .adsClosed {
+        font-size: 16px;
+        padding-top: 1em;
+    }
+}
