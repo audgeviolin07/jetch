@@ -7,11 +7,23 @@ export interface Point {
     pressure?: number
 }
 
-export interface Action {
+export interface StrokeAction {
     id: string
     kind: 'pen' | 'eraser'
     path: [number, number][]
 }
+
+export interface SnapshotAction {
+    id: string
+    kind: 'snapshot'
+    dataUrl: string
+    x: number
+    y: number
+    width: number
+    height: number
+}
+
+export type Action = StrokeAction | SnapshotAction
 
 export function pointsToPath(points: Point[], size: number): [number, number][] {
     return getStroke(points, {
@@ -41,12 +53,79 @@ export function drawPath(ctx: CanvasRenderingContext2D, points: [number, number]
     ctx.fill()
 }
 
-export function renderPaths(ctx: CanvasRenderingContext2D, history: Action[], color: string = 'black') {
+export async function createSnapshot(actions: Action[], id: string, imageCache?: Map<string, HTMLImageElement>): Promise<SnapshotAction> {
+    const bounds = getHistoryBounds(actions)
+    const width = Math.ceil(bounds.maxX - bounds.minX)
+    const height = Math.ceil(bounds.maxY - bounds.minY)
+    
+    // Handle empty case
+    if (width <= 0 || height <= 0) {
+        return {
+            id,
+            kind: 'snapshot',
+            dataUrl: '',
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0
+        }
+    }
+
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')!
+    
+    ctx.translate(-bounds.minX, -bounds.minY)
+    
+    // Load images if needed
+    const tempCache = new Map(imageCache) // Copy existing cache
+    await Promise.all(actions.map(action => {
+        if (action.kind === 'snapshot' && !tempCache.has(action.id)) {
+            return new Promise<void>((resolve) => {
+                const img = new Image()
+                img.onload = () => {
+                    tempCache.set(action.id, img)
+                    resolve()
+                }
+                img.onerror = () => resolve() // Skip failed
+                img.src = action.dataUrl
+            })
+        }
+    }))
+
+    renderPaths(ctx, actions, 'black', tempCache)
+    
+    return {
+        id,
+        kind: 'snapshot',
+        dataUrl: canvas.toDataURL(),
+        x: bounds.minX,
+        y: bounds.minY,
+        width,
+        height
+    }
+}
+
+export function renderPaths(
+    ctx: CanvasRenderingContext2D,
+    history: Action[],
+    color: string = 'black',
+    imageCache?: Map<string, HTMLImageElement>
+) {
     ctx.fillStyle = color
     
     for (const action of history) {
-        ctx.globalCompositeOperation = action.kind === 'eraser' ? 'destination-out' : 'source-over'
-        drawPath(ctx, action.path)
+        if (action.kind === 'snapshot') {
+            ctx.globalCompositeOperation = 'source-over'
+            const img = imageCache?.get(action.id)
+            if (img && img.complete && img.naturalWidth > 0) {
+                ctx.drawImage(img, action.x, action.y, action.width, action.height)
+            }
+        } else {
+            ctx.globalCompositeOperation = action.kind === 'eraser' ? 'destination-out' : 'source-over'
+            drawPath(ctx, action.path)
+        }
     }
 }
 
@@ -77,14 +156,26 @@ export function getBounds(points: [number, number][]) {
     return { minX, minY, maxX, maxY }
 }
 
-export async function exportAsPng(history: Action[]): Promise<Blob> {
-    // Calculate global bounds
+export function getActionBounds(action: Action) {
+    if (action.kind === 'snapshot') {
+        return {
+            minX: action.x,
+            minY: action.y,
+            maxX: action.x + action.width,
+            maxY: action.y + action.height
+        }
+    }
+    return getBounds(action.path)
+}
+
+export function getHistoryBounds(history: Action[]) {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
     let hasContent = false
-    
+
     for (const action of history) {
-        if (action.kind === 'pen') {
-            const b = getBounds(action.path)
+        // Erasers don't expand bounds, but snapshots and pens do
+        if (action.kind !== 'eraser') {
+            const b = getActionBounds(action)
             if (b.minX < minX) minX = b.minX
             if (b.minY < minY) minY = b.minY
             if (b.maxX > maxX) maxX = b.maxX
@@ -94,8 +185,14 @@ export async function exportAsPng(history: Action[]): Promise<Blob> {
     }
 
     if (!hasContent) {
-         minX = 0; minY = 0; maxX = 0; maxY = 0;
+        return { minX: 0, minY: 0, maxX: 0, maxY: 0 }
     }
+
+    return { minX, minY, maxX, maxY }
+}
+
+export async function exportAsPng(history: Action[]): Promise<Blob> {
+    const { minX, minY, maxX, maxY } = getHistoryBounds(history)
     
     const padding = 20
     const width = Math.ceil(maxX - minX + padding * 2)
@@ -109,7 +206,23 @@ export async function exportAsPng(history: Action[]): Promise<Blob> {
     // Translate to center the content with padding
     ctx.translate(-minX + padding, -minY + padding)
     
-    renderPaths(ctx, history)
+    // Ensure all snapshot images are loaded for export
+    const imageCache = new Map<string, HTMLImageElement>()
+    await Promise.all(history.map((action) => {
+        if (action.kind === 'snapshot') {
+            return new Promise<void>((resolve) => {
+                const img = new Image()
+                img.onload = () => {
+                    imageCache.set(action.id, img)
+                    resolve()
+                }
+                img.onerror = () => resolve() // Skip failed
+                img.src = action.dataUrl
+            })
+        }
+    }))
+
+    renderPaths(ctx, history, 'black', imageCache)
     
     const imageData = ctx.getImageData(0, 0, width, height)
     const data = imageData.data

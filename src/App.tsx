@@ -5,7 +5,7 @@ import { nanoid } from 'nanoid'
 import Photograph from './photograph/Photograph'
 import { FaEraser, FaPenFancy } from 'react-icons/fa6'
 import SharingModal from './sharing/SharingModal'
-import { pointsToPath, type Point, type Action, useLocalState, type Brush, type CanvasPosition, exportAsPng, drawPath, renderPaths } from './utils'
+import { createSnapshot, pointsToPath, type Point, type Action, useLocalState, type Brush, type CanvasPosition, exportAsPng, drawPath, renderPaths } from './utils'
 import type { IconType } from 'react-icons'
 
 export default function App() {
@@ -21,6 +21,64 @@ export default function App() {
     const [eraserSize, setEraserSize] = useLocalState<number>('eraser-size', 8)
     const [position, setPosition] = useLocalState<CanvasPosition>('position', { x: 0, y: 0, zoom: 1 })
     const [history, setHistory] = useLocalState<Action[]>('history', [])
+    
+    const imageCache = useRef<Map<string, HTMLImageElement>>(new Map())
+    const isFlattening = useRef(false)
+
+    // Load snapshot images
+    useEffect(() => {
+        let loadTriggered = false
+        history.forEach(action => {
+            if (action.kind === 'snapshot' && !imageCache.current.has(action.id)) {
+                const img = new Image()
+                img.src = action.dataUrl
+                img.onload = () => {
+                    setResizeTrigger(n => n + 1)
+                }
+                imageCache.current.set(action.id, img)
+                loadTriggered = true
+            }
+        })
+    }, [history])
+
+    // Flatten history
+    useEffect(() => {
+        const TARGET_LENGTH = 100
+        // Use a buffer of 20 items to avoid frequent flattening operations
+        if (history.length <= TARGET_LENGTH + 20 || isFlattening.current) return
+
+        const flatten = async () => {
+            isFlattening.current = true
+            try {
+                // Keep the last TARGET_LENGTH items active
+                const splitIndex = history.length - TARGET_LENGTH
+                const toFlatten = history.slice(0, splitIndex)
+                
+                const snapshot = await createSnapshot(toFlatten, nanoid(), imageCache.current)
+                
+                // Pre-load the new snapshot image
+                const img = new Image()
+                img.src = snapshot.dataUrl
+                await new Promise<void>(resolve => {
+                    img.onload = () => resolve()
+                    img.onerror = () => resolve()
+                })
+                imageCache.current.set(snapshot.id, img)
+                
+                setHistory((prev) => {
+                    // Abort if history has changed too much
+                    if (prev.length < splitIndex) return prev
+                    
+                    // Replace the flattened items with the new snapshot
+                    return [snapshot, ...prev.slice(splitIndex)]
+                })
+            } finally {
+                isFlattening.current = false
+            }
+        }
+        
+        flatten()
+    }, [history, setHistory])
 
     const activePointers = useRef(new Map<number, { clientX: number, clientY: number }>())
     const isGesturing = useRef(false)
@@ -210,12 +268,6 @@ export default function App() {
         }
 
         const dpr = targetDpr
-
-        // Ensure transform is set
-        ctx.setTransform(1, 0, 0, 1, 0, 0)
-        ctx.scale(dpr, dpr)
-        ctx.translate(-position.x, -position.y)
-        ctx.scale(position.zoom, position.zoom)
         
         const isResize = resizeTrigger !== prevResizeTriggerRef.current
         const posChanged = position.x !== prevPositionRef.current.x || 
@@ -224,8 +276,13 @@ export default function App() {
 
         if (isResize || posChanged || sizeChanged) {
             // Full redraw
+
+            ctx.setTransform(1, 0, 0, 1, 0, 0)
             ctx.clearRect(0, 0, canvas.width, canvas.height)
-            renderPaths(ctx, history)
+            ctx.scale(dpr, dpr)
+            ctx.translate(-position.x, -position.y)
+            ctx.scale(position.zoom, position.zoom)
+            renderPaths(ctx, history, 'black', imageCache.current)
         } else {
             // Check for incremental update
             const prev = prevHistoryRef.current
@@ -243,15 +300,32 @@ export default function App() {
 
             if (match) {
                 // Draw new items only
+                ctx.setTransform(1, 0, 0, 1, 0, 0)
+                ctx.scale(dpr, dpr)
+                ctx.translate(-position.x, -position.y)
+                ctx.scale(position.zoom, position.zoom)
+
                 for (let j = i; j < curr.length; j++) {
                     const action = curr[j]!
-                    ctx.globalCompositeOperation = action.kind === 'eraser' ? 'destination-out' : 'source-over'
-                    drawPath(ctx, action.path)
+                    if (action.kind === 'snapshot') {
+                        ctx.globalCompositeOperation = 'source-over'
+                        const img = imageCache.current.get(action.id)
+                        if (img && img.complete && img.naturalWidth > 0) {
+                            ctx.drawImage(img, action.x, action.y, action.width, action.height)
+                        }
+                    } else {
+                        ctx.globalCompositeOperation = action.kind === 'eraser' ? 'destination-out' : 'source-over'
+                        drawPath(ctx, action.path)
+                    }
                 }
             } else {
                 // Full redraw
+                ctx.setTransform(1, 0, 0, 1, 0, 0)
                 ctx.clearRect(0, 0, canvas.width, canvas.height)
-                renderPaths(ctx, history)
+                ctx.scale(dpr, dpr)
+                ctx.translate(-position.x, -position.y)
+                ctx.scale(position.zoom, position.zoom)
+                renderPaths(ctx, history, 'black', imageCache.current)
             }
         }
 
