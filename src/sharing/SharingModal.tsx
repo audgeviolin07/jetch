@@ -85,6 +85,7 @@ export default function SharingModal(props: SharingModalProps) {
                         }
 
                         doConfetti()
+                        setIsLoading(false)
                         setIsSent(true)
                     } catch (error) {
                         console.error(error)

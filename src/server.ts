@@ -48,16 +48,16 @@ const server = serve({
 
                 const cid = 'drawing'
                 const { error } = await resend.emails.send({
-                    from: 'jetch <sharing@jetch.kognise.dev>',
+                    from: 'jetch sharing <sharing@jetch.kognise.dev>',
                     to: result.data,
                     subject: `hi hello. ${you} has a drawing for you.`,
                     replyTo: 'jetch@kognise.dev',
                     html: `
                         <p>HELLO!</p>
                         <p><strong>${you}</strong> drew this and sent it to you:</p>
-                        <img src='cid:${cid}'>
+                        <p><img src='cid:${cid}'></p>
                         <p>(you, too, can send your friends random sketches, with the power of ✨ <a href='https://jetch.kognise.dev'>jetch</a>!)</p>
-                        <p>((if this is spam please reply to this email and i'll deal with it, very sorry.))</p>
+                        <p style='font-size: 0.8em;'>((if this is spam please reply to this email and i'll deal with it, very sorry.))</p>
                     `,
                     attachments: [
                         {
