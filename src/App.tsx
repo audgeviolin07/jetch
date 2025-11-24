@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import './index.css'
 import getStroke from 'perfect-freehand'
 import { produce } from 'immer'
@@ -52,21 +52,22 @@ function pathToSvgD(points: [number, number][]): string {
 }
 
 export function useLocalState<Type>(
-	key: string,
-	defaultValue: Type
+    key: string,
+    defaultValue: Type
 ): [Type, Dispatch<SetStateAction<Type>>] {
-	const [ state, setState ] = useState<Type>(() => {
+    const [ state, setState ] = useState<Type>(() => {
         const stored = localStorage.getItem(key)
-		if (stored) return JSON.parse(stored)
+        if (stored) return JSON.parse(stored)
         return defaultValue
     })
 
     useEffect(() => {
-		if (!state) return
-		localStorage.setItem(key, JSON.stringify(state))
-	}, [ state ])
+        if (!state) return
+        localStorage.setItem(key, JSON.stringify(state))
+    }, [ state ])
 
-	return [ state, setState ]
+
+    return [ state, setState ]
 }
 
 export default function App() {
@@ -79,7 +80,7 @@ export default function App() {
     const [position, setPosition] = useLocalState<CanvasPosition>('position', { x: 0, y: 0, zoom: 1 })
     const [history, setHistory] = useLocalState<Action[]>('history', [])
 
-    const size = brush === 'pen' ? 5 : 7
+    const size = brush === 'pen' ? 5 : 10
 
     useEffect(() => {
         function onWheel(event: WheelEvent) {
@@ -136,39 +137,132 @@ export default function App() {
         }
     }, [])
 
-    const inProgressActions: Action[] = [...inProgress.entries()].map(([id, points]) => ({
-        id: `inprogress-${id}`,
-        kind: brush,
-        path: pointsToPath(points, size),
-    }))
+    const { eraserPaths, generationMasks, generationGroups, globalBounds } = useMemo(() => {
+        const boundsPadding = 100
+        const eraserActions = history.filter((action) => action.kind === 'eraser')
+        
+        // Convert each eraser action to an SVG path, to be used in masks later.
+        const paths = eraserActions.map((eraser) => (
+            <path 
+                key={eraser.id} 
+                id={`eraser-${eraser.id}`} 
+                d={pathToSvgD(eraser.path)} 
+            />
+        ))
 
-    const allActions = [...history, ...inProgressActions]
+        // Bundle strokes into a group until we find an eraser action.
+        const groups: { startEraserIndex: number, strokes: Action[] }[] = []
+        let currentStrokes: Action[] = []
+        let eraserIdx = 0
 
-    const { defs, children } = allActions.reduce((acc, action) => {
-        if (action.kind === 'pen') {
-            acc.children.push(
-                <path 
-                    key={action.id} 
-                    d={pathToSvgD(action.path)} 
-                    fill='currentColor' 
-                />
-            )
-        } else {
-            const maskId = `mask-${action.id}`
-            acc.defs.push(
-                <mask id={maskId} key={maskId}>
-                    <rect width='100%' height='100%' fill='white' />
-                    <path d={pathToSvgD(action.path)} fill='black' />
-                </mask>
-            )
-            acc.children = [
-                <g mask={`url(#${maskId})`} key={`group-${action.id}`}>
-                    {acc.children}
-                </g>
-            ]
+        for (const action of history) {
+            if (action.kind === 'eraser') {
+                if (currentStrokes.length > 0) {
+                    groups.push({ startEraserIndex: eraserIdx, strokes: currentStrokes })
+                    currentStrokes = []
+                }
+                eraserIdx++
+            } else {
+                currentStrokes.push(action)
+            }
         }
-        return acc
-    }, { defs: [] as ReactNode[], children: [] as ReactNode[] })
+        if (currentStrokes.length > 0) {
+            groups.push({ startEraserIndex: eraserIdx, strokes: currentStrokes })
+        }
+
+        const masks: ReactNode[] = []
+        const renderedGroups: ReactNode[] = []
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+
+        for (let i = 0; i < groups.length; i++) {
+            const group = groups[i]!
+
+            // Calculate group bounds
+            let gMinX = Infinity, gMinY = Infinity, gMaxX = -Infinity, gMaxY = -Infinity
+            for (const s of group.strokes) {
+                for (const [x, y] of s.path) {
+                    if (x < gMinX) gMinX = x
+                    if (y < gMinY) gMinY = y
+                    if (x > gMaxX) gMaxX = x
+                    if (y > gMaxY) gMaxY = y
+                }
+            }
+
+            // Update global bounds
+            if (gMinX < minX) minX = gMinX
+            if (gMinY < minY) minY = gMinY
+            if (gMaxX > maxX) maxX = gMaxX
+            if (gMaxY > maxY) maxY = gMaxY
+
+            if (gMinX === Infinity) {
+                gMinX = 0
+                gMinY = 0
+                gMaxX = 0
+                gMaxY = 0
+            }
+
+            // Get all of the eraser actions that occured after this group of strokes.
+            const relevantErasers = eraserActions.slice(group.startEraserIndex)
+            
+            if (relevantErasers.length === 0) {
+                renderedGroups.push(
+                    <g key={`gen-${i}`}>
+                        {group.strokes.map(s => (
+                            <path key={s.id} d={pathToSvgD(s.path)} fill='currentColor' />
+                        ))}
+                    </g>
+                )
+            } else {
+                // Draw the masks!
+                const maskId = `mask-gen-${i}`
+                masks.push(
+                    <mask id={maskId} key={maskId}>
+                        <rect 
+                            x={gMinX - boundsPadding} 
+                            y={gMinY - boundsPadding} 
+                            width={gMaxX - gMinX + boundsPadding * 2} 
+                            height={gMaxY - gMinY + boundsPadding * 2} 
+                            fill='white' 
+                        />
+                        {relevantErasers.map(e => (
+                            <use key={e.id} href={`#eraser-${e.id}`} fill='black' />
+                        ))}
+                    </mask>
+                )
+                renderedGroups.push(
+                    <g key={`gen-${i}`} mask={`url(#${maskId})`}>
+                        {group.strokes.map(s => (
+                            <path key={s.id} d={pathToSvgD(s.path)} fill='currentColor' />
+                        ))}
+                    </g>
+                )
+            }
+        }
+
+        if (minX === Infinity) {
+            minX = 0
+            minY = 0
+            maxX = 0
+            maxY = 0
+        }
+
+        return { 
+            eraserPaths: paths, 
+            generationMasks: masks, 
+            generationGroups: renderedGroups,
+            globalBounds: {
+                x: minX - boundsPadding,
+                y: minY - boundsPadding,
+                width: maxX - minX + boundsPadding * 2,
+                height: maxY - minY + boundsPadding * 2,
+            }
+        }
+    }, [history])
+
+
+    const inProgressPaths = [...inProgress.values()].map(points => pointsToPath(points, size))
+    const inProgressEraserId = useId()
+    const isErasing = brush === 'eraser' && inProgressPaths.length > 0
 
     return (
         <div>
@@ -188,16 +282,6 @@ export default function App() {
                     SHARE WITH PEOPLE
                 </button>
             </div>
-
-            {/* <div style={{
-                position: 'fixed',
-                top: 0,
-                left: 0,
-                zIndex: 99
-            }}>
-                <button onClick={() => setBrush('pen')}>Pen</button>
-                <button onClick={() => setBrush('eraser')}>Eraser</button>
-            </div> */}
 
             <div
                 ref={containerRef}
@@ -249,9 +333,31 @@ export default function App() {
                     }}
                 >
                     <defs>
-                        {defs}
+                        {eraserPaths}
+                        {generationMasks}
+                        {isErasing && (
+                            <mask id={inProgressEraserId}>
+                                <rect 
+                                    x={globalBounds.x} 
+                                    y={globalBounds.y} 
+                                    width={globalBounds.width} 
+                                    height={globalBounds.height} 
+                                    fill='white' 
+                                />
+                                {inProgressPaths.map((p, i) => (
+                                    <path key={i} d={pathToSvgD(p)} fill='black' />
+                                ))}
+                            </mask>
+                        )}
                     </defs>
-                    {children}
+                    
+                    <g mask={isErasing ? `url(#${inProgressEraserId})` : undefined}>
+                        {generationGroups}
+                    </g>
+                    
+                    {brush === 'pen' && inProgressPaths.map((p, i) => (
+                        <path key={i} d={pathToSvgD(p)} fill='currentColor' />
+                    ))}
                 </svg>
             </div>
         </div>
