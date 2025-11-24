@@ -6,12 +6,13 @@ import Photograph from './photograph/Photograph'
 import { FaEraser, FaPenFancy } from 'react-icons/fa6'
 import SharingModal from './sharing/SharingModal'
 import { pointsToPath, type Point, type Action, useLocalState, type Brush, type CanvasPosition, exportAsPng, drawPath, renderPaths } from './utils'
+import type { IconType } from 'react-icons'
 
 export default function App() {
     const containerRef = useRef<HTMLDivElement>(null)
     const staticCanvasRef = useRef<HTMLCanvasElement>(null)
     const activeCanvasRef = useRef<HTMLCanvasElement>(null)
-    const inProgressRef = useRef(new Map<number, Point[]>())
+    const inProgress = useRef(new Map<number, Point[]>())
     const redo = useRef<Action[]>([])
     const [sharingBlob, setSharingBlob] = useState<Blob | null>(null)
     
@@ -21,9 +22,9 @@ export default function App() {
     const [position, setPosition] = useLocalState<CanvasPosition>('position', { x: 0, y: 0, zoom: 1 })
     const [history, setHistory] = useLocalState<Action[]>('history', [])
 
-    const activePointersRef = useRef(new Map<number, { clientX: number, clientY: number }>())
-    const isGesturingRef = useRef(false)
-    const startGestureRef = useRef({
+    const activePointers = useRef(new Map<number, { clientX: number, clientY: number }>())
+    const isGesturing = useRef(false)
+    const gestureStart = useRef({
         zoom: 1,
         distance: 0,
         center: { clientX: 0, clientY: 0 },
@@ -75,8 +76,8 @@ export default function App() {
         ctx.scale(position.zoom, position.zoom)
 
         // Draw in-progress
-        if (inProgressRef.current.size > 0) {
-            const inProgressPaths = [...inProgressRef.current.values()].map(points => pointsToPath(points, size))
+        if (inProgress.current.size > 0) {
+            const inProgressPaths = [...inProgress.current.values()].map(points => pointsToPath(points, size))
             
             if (brush === 'eraser') {
                 // For erasing, we draw white on the active layer to simulate looking through to background
@@ -194,7 +195,7 @@ export default function App() {
         if (!ctx) return
 
         // Use lower quality during gestures for performance
-        const targetDpr = isGesturingRef.current ? 1 : (window.devicePixelRatio || 1)
+        const targetDpr = isGesturing.current ? 0.75 : (window.devicePixelRatio || 1)
         
         // Ensure canvas size matches target DPR
         const width = containerRef.current.clientWidth
@@ -209,6 +210,12 @@ export default function App() {
         }
 
         const dpr = targetDpr
+
+        // Ensure transform is set
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.scale(dpr, dpr)
+        ctx.translate(-position.x, -position.y)
+        ctx.scale(position.zoom, position.zoom)
         
         const isResize = resizeTrigger !== prevResizeTriggerRef.current
         const posChanged = position.x !== prevPositionRef.current.x || 
@@ -217,11 +224,7 @@ export default function App() {
 
         if (isResize || posChanged || sizeChanged) {
             // Full redraw
-            ctx.setTransform(1, 0, 0, 1, 0, 0)
             ctx.clearRect(0, 0, canvas.width, canvas.height)
-            ctx.scale(dpr, dpr)
-            ctx.translate(-position.x, -position.y)
-            ctx.scale(position.zoom, position.zoom)
             renderPaths(ctx, history)
         } else {
             // Check for incremental update
@@ -239,13 +242,6 @@ export default function App() {
             }
 
             if (match) {
-                // We just added items (or nothing changed)
-                // Ensure transform is set
-                ctx.setTransform(1, 0, 0, 1, 0, 0)
-                ctx.scale(dpr, dpr)
-                ctx.translate(-position.x, -position.y)
-                ctx.scale(position.zoom, position.zoom)
-
                 // Draw new items only
                 for (let j = i; j < curr.length; j++) {
                     const action = curr[j]!
@@ -253,12 +249,8 @@ export default function App() {
                     drawPath(ctx, action.path)
                 }
             } else {
-                // History diverged (undo, or replacement), full redraw
-                ctx.setTransform(1, 0, 0, 1, 0, 0)
+                // Full redraw
                 ctx.clearRect(0, 0, canvas.width, canvas.height)
-                ctx.scale(dpr, dpr)
-                ctx.translate(-position.x, -position.y)
-                ctx.scale(position.zoom, position.zoom)
                 renderPaths(ctx, history)
             }
         }
@@ -274,6 +266,19 @@ export default function App() {
         renderActiveStrokes()
     }, [position, size, brush, resizeTrigger])
 
+    function commitStroke(pointerId: number) {
+        const stroke = pointsToPath(inProgress.current.get(pointerId)!, size)
+        redo.current = []
+        setHistory(produce((draft) => {
+            draft.push({
+                id: nanoid(),
+                kind: brush,
+                path: stroke,
+            })
+        }))
+        inProgress.current.set(pointerId, [])
+    }
+
     return (
         <div>
             <div className='photograph-a'><Photograph /></div>
@@ -281,12 +286,30 @@ export default function App() {
 
             <div className='toolbar'>
                 <div className='tools'>
-                    <button className={brush === 'pen' ? 'active' : ''} onClick={() => setBrush('pen')}>
-                        <FaPenFancy />
-                    </button>
-                    <button className={brush === 'eraser' ? 'active' : ''} onClick={() => setBrush('eraser')}>
-                        <FaEraser />
-                    </button>
+                    <ToolbarButton
+                        isActive={brush === 'pen'}
+                        onActivate={() => {
+                            // This will create duplicate history entries per stroke but this simplification
+                            // is acceptable for now, since this is an edge case and drawing with multiple
+                            // pointers isn't even a thing right now.
+                            for (const pointerId of inProgress.current.keys()) commitStroke(pointerId)
+                            renderActiveStrokes()
+                            setBrush('pen')
+                        }}
+                        Icon={FaPenFancy}
+                    />
+                    <ToolbarButton
+                        isActive={brush === 'eraser'}
+                        onActivate={() => {
+                            // This will create duplicate history entries per stroke but this simplification
+                            // is acceptable for now, since this is an edge case and drawing with multiple
+                            // pointers isn't even a thing right now.
+                            for (const pointerId of inProgress.current.keys()) commitStroke(pointerId)
+                            renderActiveStrokes()
+                            setBrush('eraser')
+                        }}
+                        Icon={FaEraser}
+                    />
 
                     <div className='divider' />
 
@@ -325,18 +348,18 @@ export default function App() {
                     event.preventDefault()
                     containerRef.current?.setPointerCapture(event.pointerId)
 
-                    activePointersRef.current.set(event.pointerId, {
+                    activePointers.current.set(event.pointerId, {
                         clientX: event.clientX,
                         clientY: event.clientY,
                     })
 
-                    if (activePointersRef.current.size === 2) {
+                    if (activePointers.current.size === 2) {
                         // Start gesture
-                        isGesturingRef.current = true
-                        inProgressRef.current.clear() // Cancel any drawing
+                        isGesturing.current = true
+                        inProgress.current.clear() // Cancel any drawing
                         renderActiveStrokes()
 
-                        const pointers = [...activePointersRef.current.values()]
+                        const pointers = [...activePointers.current.values()]
                         const p1 = pointers[0]!
                         const p2 = pointers[1]!
                         const dist = Math.hypot(p2.clientX - p1.clientX, p2.clientY - p1.clientY)
@@ -345,25 +368,25 @@ export default function App() {
                             clientY: (p1.clientY + p2.clientY) / 2,
                         }
 
-                        startGestureRef.current = {
+                        gestureStart.current = {
                             zoom: position.zoom,
                             distance: dist,
                             center,
                             pan: { x: position.x, y: position.y },
                         }
-                    } else if (!isGesturingRef.current) {
-                        inProgressRef.current.set(event.pointerId, [])
+                    } else if (!isGesturing.current) {
+                        inProgress.current.set(event.pointerId, [])
                         renderActiveStrokes()
                     }
                 }}
                 onPointerMove={(event) => {
-                    activePointersRef.current.set(event.pointerId, {
+                    activePointers.current.set(event.pointerId, {
                         clientX: event.clientX,
                         clientY: event.clientY,
                     })
 
-                    if (isGesturingRef.current && activePointersRef.current.size === 2) {
-                        const pointers = [...activePointersRef.current.values()]
+                    if (isGesturing.current && activePointers.current.size === 2) {
+                        const pointers = [...activePointers.current.values()]
                         const p1 = pointers[0]!
                         const p2 = pointers[1]!
                         const dist = Math.hypot(p2.clientX - p1.clientX, p2.clientY - p1.clientY)
@@ -372,7 +395,7 @@ export default function App() {
                             clientY: (p1.clientY + p2.clientY) / 2,
                         }
 
-                        const start = startGestureRef.current
+                        const start = gestureStart.current
                         const scale = dist / start.distance
                         const newZoom = Math.max(Math.min(start.zoom * scale, 15), 0.05)
 
@@ -391,7 +414,7 @@ export default function App() {
                         return
                     }
 
-                    const line = inProgressRef.current.get(event.pointerId)
+                    const line = inProgress.current.get(event.pointerId)
                     if (!line) return
 
                     line.push({
@@ -404,43 +427,33 @@ export default function App() {
                 }}
                 onPointerUp={(event) => {
                     containerRef.current?.releasePointerCapture(event.pointerId)
-                    activePointersRef.current.delete(event.pointerId)
+                    activePointers.current.delete(event.pointerId)
                     
-                    if (activePointersRef.current.size < 2) {
-                        if (isGesturingRef.current) {
-                            isGesturingRef.current = false
+                    if (activePointers.current.size < 2) {
+                        if (isGesturing.current) {
+                            isGesturing.current = false
                             setResizeTrigger((n) => n + 1)
                         }
                     }
 
-                    if (inProgressRef.current.has(event.pointerId)) {
-                        const stroke = pointsToPath(inProgressRef.current.get(event.pointerId)!, size)
-
-                        redo.current = []
-                        setHistory(produce((draft) => {
-                            draft.push({
-                                id: nanoid(),
-                                kind: brush,
-                                path: stroke,
-                            })
-                        }))
-
-                        inProgressRef.current.delete(event.pointerId)
+                    if (inProgress.current.has(event.pointerId)) {
+                        commitStroke(event.pointerId)
+                        inProgress.current.delete(event.pointerId)
                         renderActiveStrokes()
                     }
                 }}
                 onPointerCancel={(event) => {
                     containerRef.current?.releasePointerCapture(event.pointerId)
-                    activePointersRef.current.delete(event.pointerId)
+                    activePointers.current.delete(event.pointerId)
                     
-                    if (activePointersRef.current.size < 2) {
-                        if (isGesturingRef.current) {
-                            isGesturingRef.current = false
+                    if (activePointers.current.size < 2) {
+                        if (isGesturing.current) {
+                            isGesturing.current = false
                             setResizeTrigger((n) => n + 1)
                         }
                     }
 
-                    inProgressRef.current.delete(event.pointerId)
+                    inProgress.current.delete(event.pointerId)
                     renderActiveStrokes()
                 }}
                 className='container'
@@ -452,5 +465,53 @@ export default function App() {
 
             {sharingBlob && <SharingModal pngBlob={sharingBlob} onClose={() => setSharingBlob(null)} />}
         </div>
+    )
+}
+
+
+interface ToolbarButtonProps {
+    isActive: boolean
+    onActivate: () => void
+    Icon: IconType
+}
+
+function ToolbarButton({ isActive, onActivate, Icon }: ToolbarButtonProps) {
+    const [pressedPointers, setPressedPointers] = useState(0)
+    const isPressed = pressedPointers > 0
+
+    return (
+        <button
+            className={`${isActive ? 'active' : ''} ${isPressed ? 'pressed' : ''}`}
+            onPointerDown={(event) => {
+                setPressedPointers(pressedPointers + 1)
+                
+                function onPointerUp(newEvent: PointerEvent) {
+                    if (newEvent.pointerId === event.pointerId) {
+                        setPressedPointers((pressedPointers) => pressedPointers - 1)
+                        window.removeEventListener('pointerup', onPointerUp)
+                        window.removeEventListener('pointercancel', onPointerUp)
+
+                        if (newEvent.target === event.target
+                            && document.elementFromPoint(newEvent.clientX, newEvent.clientY) === event.target) {
+                            // This will lead to double activation, but that's fine for toolbar icons.
+                            onActivate()
+                        }
+                    }
+                }
+                function onPointerCancel(newEvent: PointerEvent) {
+                    if (newEvent.pointerId === event.pointerId) {
+                        setPressedPointers((pressedPointers) => pressedPointers - 1)
+                        window.removeEventListener('pointerup', onPointerUp)
+                        window.removeEventListener('pointercancel', onPointerCancel)
+                    }
+                }
+
+                window.addEventListener('pointerup', onPointerUp)
+                window.addEventListener('pointercancel', onPointerCancel)
+            }}
+            onClick={() => onActivate()}
+        >
+            <Icon />
+        </button>
     )
 }

@@ -98,13 +98,13 @@
                 box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
                 margin: 0;
 
-                &:hover {
+                &:hover, &:active {
                     transform: scale(1.1);
                     background-color: #e8eaee;
                 }
                 
                 &:active {
-                    transform: scale(0.98);
+                    transform: scale(0.95);
                 }
 
                 &::after {
@@ -150,7 +150,7 @@
                 flex: 1;
                 box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 
-                &:not(:disabled):hover {
+                &:not(:disabled):hover, &:not(:disabled):active {
                     background-color: #e8eaee;
                     transform: scale(1.05);
                 }
@@ -163,7 +163,7 @@
                     background-color: var(--accent);
                     color: #ffffff;
 
-                    &:not(:disabled):hover {
+                    &:not(:disabled):hover, &:not(:disabled):active {
                         background-color: var(--accent-dark);
                     }
                 }
