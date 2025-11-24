@@ -176,8 +176,8 @@ export default function App() {
 
     return (
         <div>
-            <div className='photograph-left'><Photograph /></div>
-            <div className='photograph-right'><Photograph /></div>
+            <div className='photograph-a'><Photograph /></div>
+            <div className='photograph-b'><Photograph /></div>
 
             <div className='toolbar'>
                 <div className='tools'>
@@ -215,7 +215,7 @@ export default function App() {
                     const blob = await exportAsPng(history)
                     setSharingBlob(blob)
                 }}>
-                    SHARE WITH PEOPLE
+                    SHARE<span className='mobile-hidden'> WITH PEOPLE</span>
                 </button>
             </div>
 
