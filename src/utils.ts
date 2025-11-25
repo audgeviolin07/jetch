@@ -250,9 +250,14 @@ export async function exportAsPng(history: Action[]): Promise<Blob> {
     const cropWidth = found ? cMaxX - cMinX + 1 : 0
     const cropHeight = found ? cMaxY - cMinY + 1 : 0
 
+    const MAX_DIMENSION = 2000
+    const scale = Math.min(1, MAX_DIMENSION / cropWidth, MAX_DIMENSION / cropHeight)
+    const finalWidth = Math.floor(cropWidth * scale)
+    const finalHeight = Math.floor(cropHeight * scale)
+
     const outputCanvas = document.createElement('canvas')
-    outputCanvas.width = cropWidth + padding * 2
-    outputCanvas.height = cropHeight + padding * 2
+    outputCanvas.width = finalWidth + padding * 2
+    outputCanvas.height = finalHeight + padding * 2
     const outCtx = outputCanvas.getContext('2d')!
 
     outCtx.fillStyle = '#ffffff'
@@ -262,7 +267,7 @@ export async function exportAsPng(history: Action[]): Promise<Blob> {
         outCtx.drawImage(
             canvas,
             cMinX, cMinY, cropWidth, cropHeight,
-            padding, padding, cropWidth, cropHeight
+            padding, padding, finalWidth, finalHeight
         )
     }
     

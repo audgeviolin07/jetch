@@ -1,7 +1,7 @@
 :root {
     --photograph-gutter: 5px;
-    --accent: #2f9e44;
-    --accent-dark: #2b8a3e;
+    --accent: oklch(0.6268 0.2047 150.88);
+    --accent-dark: oklch(0.5456 0.2047 150.88);
     box-sizing: border-box;
     font-family: 'Comic Sans MS', 'Comic Sans', 'Comic Neue', cursive;
     -webkit-tap-highlight-color: transparent;
@@ -205,7 +205,7 @@ svg {
 }
 
 ::selection {
-    background-color: #2f9e444f;
+    background-color: #00a7404f;
 }
 
 @media (max-width: 900px) {
