@@ -257,6 +257,10 @@ export default function App() {
         return () => observer.disconnect()
     }, [])
 
+    useEffect(() => {
+        console.log('History length:', history.length)
+    }, [history.length])
+
     // Render static history
     useEffect(() => {
         const canvas = staticCanvasRef.current

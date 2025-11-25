@@ -78,7 +78,12 @@ export function renderPath(ctx: CanvasRenderingContext2D, points: [number, numbe
     ctx.fill()
 }
 
-export async function createSnapshot(actions: Action[], id: string, imageCache?: Map<string, HTMLImageElement>): Promise<SnapshotAction> {
+export async function createSnapshot(
+    actions: Action[],
+    id: string,
+    imageCache?: Map<string, HTMLImageElement>,
+    scale: number = 2
+): Promise<SnapshotAction> {
     const bounds = getHistoryBounds(actions)
     const width = Math.ceil(bounds.maxX - bounds.minX)
     const height = Math.ceil(bounds.maxY - bounds.minY)
@@ -97,10 +102,11 @@ export async function createSnapshot(actions: Action[], id: string, imageCache?:
     }
 
     const canvas = document.createElement('canvas')
-    canvas.width = width
-    canvas.height = height
+    canvas.width = width * scale
+    canvas.height = height * scale
     const ctx = canvas.getContext('2d')!
     
+    ctx.scale(scale, scale)
     ctx.translate(-bounds.minX, -bounds.minY)
     
     // Load images if needed
@@ -291,7 +297,7 @@ export async function exportAsPng(history: Action[]): Promise<Blob> {
     const cropHeight = found ? cMaxY - cMinY + 1 : 0
 
     const MAX_DIMENSION = 2000
-    const scale = Math.min(1, MAX_DIMENSION / cropWidth, MAX_DIMENSION / cropHeight)
+    const scale = Math.min(4, MAX_DIMENSION / cropWidth, MAX_DIMENSION / cropHeight)
     const finalWidth = Math.floor(cropWidth * scale)
     const finalHeight = Math.floor(cropHeight * scale)
 
@@ -304,11 +310,12 @@ export async function exportAsPng(history: Action[]): Promise<Blob> {
     outCtx.fillRect(0, 0, outputCanvas.width, outputCanvas.height)
 
     if (found) {
-        outCtx.drawImage(
-            canvas,
-            cMinX, cMinY, cropWidth, cropHeight,
-            padding, padding, finalWidth, finalHeight
-        )
+        outCtx.save()
+        outCtx.translate(padding, padding)
+        outCtx.scale(scale, scale)
+        outCtx.translate(-(cMinX + minX - padding), -(cMinY + minY - padding))
+        renderActions(outCtx, history, imageCache)
+        outCtx.restore()
     }
     
     return new Promise<Blob>((resolve, reject) => {
