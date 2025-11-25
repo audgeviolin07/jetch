@@ -39,6 +39,10 @@ export default function Photograph() {
                     Why this ad? <div className={styles.icon} dangerouslySetInnerHTML={{ __html: adchoicesSvg }} />
                 </button>
             </div>
+
+            <div className={styles.openSource}>
+                btw jetch is open source on <a href='https://github.com/kognise/jetch' target='_blank'>github</a>
+            </div>
         </div>
     )
 

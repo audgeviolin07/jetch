@@ -418,6 +418,7 @@ export default function App() {
 
             <div
                 ref={containerRef}
+                onContextMenu={(event) => event.preventDefault()}
                 onPointerDown={(event) => {
                     event.preventDefault()
                     containerRef.current?.setPointerCapture(event.pointerId)

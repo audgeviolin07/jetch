@@ -137,4 +137,17 @@
         font-size: 16px;
         padding-top: 1em;
     }
+
+    .openSource {
+        position: absolute;
+        bottom: 10px;
+        color: rgba(0,0,0,.4);
+        font-size: 12px;
+        text-align: center;
+        width: 100%;
+
+        a {
+            color: inherit;
+        }
+    }
 }
