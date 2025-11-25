@@ -1,21 +1,35 @@
-# bun-react-template
+# jetch
 
-To install dependencies:
+it's a drawing app with terrible memes as advertisements and a big button to email the drawing to your friends.
+
+why? a random person on x, the everything app asked me politely!
+
+## pay it a visit today
+
+[jetch.kognise.dev](https://jetch.kognise.dev/)
+
+[![jetch](./src/icon.png)](https://jetch.kognise.dev)
+
+## why is it called jetch?
+
+why do you think it's called jetch?
+
+## development
+
+to install dependencies:
 
 ```bash
 bun install
 ```
 
-To start a development server:
+to start a development server:
 
 ```bash
 bun dev
 ```
 
-To run for production:
+to run for production:
 
 ```bash
 bun start
 ```
-
-This project was created using `bun init` in bun v1.3.2. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.
