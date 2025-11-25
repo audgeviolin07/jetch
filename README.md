@@ -1,6 +1,6 @@
 # jetch
 
-it's a drawing app with terrible memes as advertisements and a big button to email the drawing to your friends.
+it's a drawing app with terrible memes as advertisements and a big button to email the drawing to your friends. it also has a cat button.
 
 why? a random person on x, the everything app asked me politely!
 
