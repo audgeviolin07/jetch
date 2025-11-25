@@ -3,9 +3,9 @@ import './index.css'
 import { produce } from 'immer'
 import { nanoid } from 'nanoid'
 import Photograph from './photograph/Photograph'
-import { FaEraser, FaPenFancy } from 'react-icons/fa6'
+import { FaCat, FaEraser, FaPenFancy } from 'react-icons/fa6'
 import SharingModal from './sharing/SharingModal'
-import { createSnapshot, pointsToPath, type Point, type Action, useLocalState, type Brush, type CanvasPosition, exportAsPng, drawPath, renderPaths } from './utils'
+import { createSnapshot, pointsToPath, type Point, type Action, useLocalState, type Brush, type CanvasPosition, exportAsPng, renderPath, renderActions, renderAction, kitty, kittySize } from './utils'
 import type { IconType } from 'react-icons'
 
 export default function App() {
@@ -27,8 +27,7 @@ export default function App() {
 
     // Load snapshot images
     useEffect(() => {
-        let loadTriggered = false
-        history.forEach(action => {
+        for (const action of history) {
             if (action.kind === 'snapshot' && !imageCache.current.has(action.id)) {
                 const img = new Image()
                 img.src = action.dataUrl
@@ -36,9 +35,8 @@ export default function App() {
                     setResizeTrigger(n => n + 1)
                 }
                 imageCache.current.set(action.id, img)
-                loadTriggered = true
             }
-        })
+        }
     }, [history])
 
     // Flatten history
@@ -95,25 +93,29 @@ export default function App() {
     const maxSize = brush === 'pen' ? 30 : 80
 
     const cursor = useMemo(() => {
-        const actualSize = size * position.zoom
-        const svgSize = Math.ceil(actualSize + 4)
-        const r = actualSize / 2
-        const c = svgSize / 2
+        if (brush === 'kitty') {
+            return 'crosshair'
+        } else {
+            const actualSize = size * position.zoom
+            const r = actualSize / 2
+            const svgSize = Math.ceil(actualSize + 4)
 
-        const svg = `
-            <svg width='${svgSize}' height='${svgSize}' xmlns='http://www.w3.org/2000/svg'>
-                <circle
-                    cx='${c}'
-                    cy='${c}'
-                    r='${r}'
-                    stroke='black'
-                    stroke-width='1.5'
-                    fill='${brush === 'pen' ? 'blank' : 'white'}'
-                />
-            </svg>
-        `
-        const encoded = encodeURIComponent(svg.replace(/[\r\n]+/g, '').trim())
-        return `url("data:image/svg+xml;utf8,${encoded}") ${c} ${c}, auto`
+            const svg = `
+                <svg xmlns='http://www.w3.org/2000/svg' width='${svgSize}' height='${svgSize}'>
+                    <circle
+                        cx='${svgSize / 2}'
+                        cy='${svgSize / 2}'
+                        r='${r}'
+                        stroke='black'
+                        stroke-width='1.5'
+                        fill='${brush === 'pen' ? 'blank' : 'white'}'
+                    />
+                </svg>
+            `
+        
+            const encoded = encodeURIComponent(svg.replace(/[\r\n]+/g, '').trim())
+            return `url("data:image/svg+xml;utf8,${encoded}") ${svgSize / 2} ${svgSize / 2}, auto`
+        }
     }, [size, position.zoom, brush])
 
     function renderActiveStrokes() {
@@ -135,6 +137,18 @@ export default function App() {
 
         // Draw in-progress
         if (inProgress.current.size > 0) {
+            if (brush === 'kitty') {
+                ctx.globalCompositeOperation = 'source-over'
+                
+                for (const points of inProgress.current.values()) {
+                    const point = points[0]
+                    if (!point) continue
+                    ctx.drawImage(kitty, point.x - kittySize / 2, point.y - kittySize / 2, kittySize, kittySize)
+                }
+
+                return
+            }
+
             const inProgressPaths = [...inProgress.current.values()].map(points => pointsToPath(points, size))
             
             if (brush === 'eraser') {
@@ -146,9 +160,7 @@ export default function App() {
                 ctx.globalCompositeOperation = 'source-over'
             }
             
-            for (const path of inProgressPaths) {
-                drawPath(ctx, path)
-            }
+            for (const path of inProgressPaths) renderPath(ctx, path)
         }
     }
 
@@ -282,7 +294,7 @@ export default function App() {
             ctx.scale(dpr, dpr)
             ctx.translate(-position.x, -position.y)
             ctx.scale(position.zoom, position.zoom)
-            renderPaths(ctx, history, 'black', imageCache.current)
+            renderActions(ctx, history, imageCache.current)
         } else {
             // Check for incremental update
             const prev = prevHistoryRef.current
@@ -307,16 +319,7 @@ export default function App() {
 
                 for (let j = i; j < curr.length; j++) {
                     const action = curr[j]!
-                    if (action.kind === 'snapshot') {
-                        ctx.globalCompositeOperation = 'source-over'
-                        const img = imageCache.current.get(action.id)
-                        if (img && img.complete && img.naturalWidth > 0) {
-                            ctx.drawImage(img, action.x, action.y, action.width, action.height)
-                        }
-                    } else {
-                        ctx.globalCompositeOperation = action.kind === 'eraser' ? 'destination-out' : 'source-over'
-                        drawPath(ctx, action.path)
-                    }
+                    renderAction(ctx, action, imageCache.current)
                 }
             } else {
                 // Full redraw
@@ -325,7 +328,7 @@ export default function App() {
                 ctx.scale(dpr, dpr)
                 ctx.translate(-position.x, -position.y)
                 ctx.scale(position.zoom, position.zoom)
-                renderPaths(ctx, history, 'black', imageCache.current)
+                renderActions(ctx, history, imageCache.current)
             }
         }
 
@@ -341,6 +344,24 @@ export default function App() {
     }, [position, size, brush, resizeTrigger])
 
     function commitStroke(pointerId: number) {
+        if (brush === 'kitty') {
+            const point = inProgress.current.get(pointerId)![0]
+            if (!point) return
+
+            redo.current = []
+            setHistory(produce((draft) => {
+                draft.push({
+                    id: nanoid(),
+                    kind: 'kitty',
+                    x: point.x,
+                    y: point.y,
+                })
+            }))
+            inProgress.current.set(pointerId, [])
+
+            return
+        }
+
         const stroke = pointsToPath(inProgress.current.get(pointerId)!, size)
         redo.current = []
         setHistory(produce((draft) => {
@@ -375,14 +396,22 @@ export default function App() {
                     <ToolbarButton
                         isActive={brush === 'eraser'}
                         onActivate={() => {
-                            // This will create duplicate history entries per stroke but this simplification
-                            // is acceptable for now, since this is an edge case and drawing with multiple
-                            // pointers isn't even a thing right now.
+                            // See above.
                             for (const pointerId of inProgress.current.keys()) commitStroke(pointerId)
                             renderActiveStrokes()
                             setBrush('eraser')
                         }}
                         Icon={FaEraser}
+                    />
+                    <ToolbarButton
+                        isActive={brush === 'kitty'}
+                        onActivate={() => {
+                            // See above.
+                            for (const pointerId of inProgress.current.keys()) commitStroke(pointerId)
+                            renderActiveStrokes()
+                            setBrush('kitty')
+                        }}
+                        Icon={FaCat}
                     />
 
                     <div className='divider' />
@@ -393,6 +422,7 @@ export default function App() {
                             min={minSize * 1000}
                             max={maxSize * 1000}
                             value={size * 1000}
+                            disabled={brush === 'kitty'}
                             onChange={(event) => setSize(parseInt(event.target.value, 10) / 1000)}
                         />
 
@@ -450,7 +480,13 @@ export default function App() {
                             pan: { x: position.x, y: position.y },
                         }
                     } else if (!isGesturing.current) {
-                        inProgress.current.set(event.pointerId, [])
+                        inProgress.current.set(event.pointerId, [
+                            {
+                                x: (event.clientX + position.x) / position.zoom,
+                                y: (event.clientY + position.y) / position.zoom,
+                                pressure: event.pressure,
+                            },
+                        ])
                         renderActiveStrokes()
                     }
                 }}

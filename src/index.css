@@ -99,17 +99,22 @@ body {
                     height: 15px;
                     border-radius: 50%;
                     background: #000000;
-                    cursor: pointer;
                     transition: all 300ms;
                     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-
-                    &:hover {
-                        transform: scale(1.15);
-                    }
                 }
 
-                &:active::-webkit-slider-thumb {
+                &:not(:disabled)::-webkit-slider-thumb:hover {
+                    cursor: pointer;
+                    transform: scale(1.15);
+                }
+
+                &:active:not(:disabled)::-webkit-slider-thumb {
                     transform: scale(0.9);
+                }
+
+                &:disabled {
+                    opacity: 0.5;
+                    cursor: not-allowed;
                 }
             }
 
@@ -133,7 +138,7 @@ body {
                 }
             }
 
-            &:hover .preview-container {
+            &:hover:not(:has(:disabled)) .preview-container {
                 opacity: 1;
             }
         }

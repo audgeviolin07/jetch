@@ -1,5 +1,14 @@
 import getStroke from 'perfect-freehand'
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
+import kittyPath from './kitty.png'
+
+export const kitty = new Image()
+kitty.src = kittyPath
+await new Promise<void>((resolve, reject) => {
+    kitty.onload = () => resolve()
+    kitty.onerror = () => reject()
+})
+export const kittySize = 50
 
 export interface Point {
     x: number
@@ -13,6 +22,13 @@ export interface StrokeAction {
     path: [number, number][]
 }
 
+export interface KittyAction {
+    id: string
+    kind: 'kitty'
+    x: number
+    y: number
+}
+
 export interface SnapshotAction {
     id: string
     kind: 'snapshot'
@@ -23,9 +39,18 @@ export interface SnapshotAction {
     height: number
 }
 
-export type Action = StrokeAction | SnapshotAction
+export type Action = StrokeAction | SnapshotAction | KittyAction
 
 export function pointsToPath(points: Point[], size: number): [number, number][] {
+    if (points.length === 0) return []
+    if (points.length === 1) {
+        return getStroke(points, {
+            size,
+            thinning: 0,
+            streamline: 1,
+            smoothing: 1,
+        }) satisfies number[][] as [number, number][]
+    }
     return getStroke(points, {
         size,
         thinning: 0.25,
@@ -34,7 +59,7 @@ export function pointsToPath(points: Point[], size: number): [number, number][] 
     }) satisfies number[][] as [number, number][]
 }
 
-export function drawPath(ctx: CanvasRenderingContext2D, points: [number, number][]) {
+export function renderPath(ctx: CanvasRenderingContext2D, points: [number, number][]) {
     if (points.length < 2) return
 
     ctx.beginPath()
@@ -94,7 +119,7 @@ export async function createSnapshot(actions: Action[], id: string, imageCache?:
         }
     }))
 
-    renderPaths(ctx, actions, 'black', tempCache)
+    renderActions(ctx, actions, tempCache)
     
     return {
         id,
@@ -107,26 +132,33 @@ export async function createSnapshot(actions: Action[], id: string, imageCache?:
     }
 }
 
-export function renderPaths(
+export function renderAction(
+    ctx: CanvasRenderingContext2D,
+    action: Action,
+    imageCache?: Map<string, HTMLImageElement>,
+) {
+    if (action.kind === 'snapshot') {
+        ctx.globalCompositeOperation = 'source-over'
+        const img = imageCache?.get(action.id)
+        if (img && img.complete && img.naturalWidth > 0) {
+            ctx.drawImage(img, action.x, action.y, action.width, action.height)
+        }
+    } else if (action.kind === 'kitty') {
+        ctx.globalCompositeOperation = 'source-over'
+        ctx.drawImage(kitty, action.x - kittySize / 2, action.y - kittySize / 2, kittySize, kittySize)
+    } else {
+        ctx.fillStyle = 'black'
+        ctx.globalCompositeOperation = action.kind === 'eraser' ? 'destination-out' : 'source-over'
+        renderPath(ctx, action.path)
+    }
+}
+
+export function renderActions(
     ctx: CanvasRenderingContext2D,
     history: Action[],
-    color: string = 'black',
     imageCache?: Map<string, HTMLImageElement>
 ) {
-    ctx.fillStyle = color
-    
-    for (const action of history) {
-        if (action.kind === 'snapshot') {
-            ctx.globalCompositeOperation = 'source-over'
-            const img = imageCache?.get(action.id)
-            if (img && img.complete && img.naturalWidth > 0) {
-                ctx.drawImage(img, action.x, action.y, action.width, action.height)
-            }
-        } else {
-            ctx.globalCompositeOperation = action.kind === 'eraser' ? 'destination-out' : 'source-over'
-            drawPath(ctx, action.path)
-        }
-    }
+    for (const action of history) renderAction(ctx, action, imageCache)
 }
 
 export function pathToSvgD(points: [number, number][]): string {
@@ -163,6 +195,14 @@ export function getActionBounds(action: Action) {
             minY: action.y,
             maxX: action.x + action.width,
             maxY: action.y + action.height
+        }
+    }
+    if (action.kind === 'kitty') {
+        return {
+            minX: action.x - kittySize / 2,
+            minY: action.y - kittySize / 2,
+            maxX: action.x + kittySize / 2,
+            maxY: action.y + kittySize / 2
         }
     }
     return getBounds(action.path)
@@ -222,7 +262,7 @@ export async function exportAsPng(history: Action[]): Promise<Blob> {
         }
     }))
 
-    renderPaths(ctx, history, 'black', imageCache)
+    renderActions(ctx, history, imageCache)
     
     const imageData = ctx.getImageData(0, 0, width, height)
     const data = imageData.data
@@ -288,7 +328,7 @@ export interface CanvasPosition {
     y: number
 }
 
-export type Brush = 'pen' | 'eraser'
+export type Brush = 'pen' | 'eraser' | 'kitty'
 
 export function useLocalState<Type>(
     key: string,
